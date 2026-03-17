@@ -2,6 +2,8 @@ import Cocoa
 import SwiftUI
 import UserNotifications
 import ServiceManagement
+import CoreGraphics
+import AppKit
 
 enum CornerPosition: String, CaseIterable {
     case topLeft = "Top Left"
@@ -83,6 +85,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
     private let perAppHiddenAppsKey = "BongoCatPerAppHiddenApps"
     @Published internal var isPerAppHidingEnabled: Bool = true  // Default enabled
     private let perAppHidingKey = "BongoCatPerAppHiding"
+    internal var lastNonBongoCatApp: (bundleIdentifier: String, displayName: String) = ("unknown", "Unknown App")
 
     // Milestone notifications management
     @Published internal var milestoneManager = MilestoneNotificationManager.shared
@@ -129,6 +132,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         setupOverlayWindow()
         setupInputMonitoring()
         setupAppSwitchMonitoring()
+        
+        // Initialize last non-BongoCat with dummy values
+        lastNonBongoCatApp = getCurrentActiveApp()
+        
         requestAccessibilityPermissions()
 
         // Initialize analytics and track app launch
@@ -215,7 +222,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
 
         let menu = NSMenu()
-        let currentAppDisplayName = NSWorkspace.shared.frontmostApplication?.localizedName ?? getCurrentActiveApp()
+        let currentApp = getCurrentNonBongoCatApp()
+
+        let debugCurrentApp = getCurrentActiveApp()
+        
+        // Extract display name from bundle identifier
+        let currentAppDisplayName = currentApp.displayName
+        
         menu.addItem(NSMenuItem(title: "Show/Hide Overlay (Global)", action: #selector(toggleOverlay), keyEquivalent: ""))
         let currentAppMenuItem = NSMenuItem(title: "Show/Hide Overlay (Current App: \(currentAppDisplayName))", action: #selector(toggleOverlayForCurrentAppPublic), keyEquivalent: "")
         currentAppMenuItem.isHidden = !isPerAppHidingEnabled
@@ -242,6 +255,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         // Developer options (only show if analytics debug is needed)
         #if DEBUG
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(title: "Current Active App: \(debugCurrentApp.bundleIdentifier)", action: nil, keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "Current Non-BongoCat Active App: \(currentApp.bundleIdentifier)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🔧 Analytics Status", action: #selector(showAnalyticsStatus), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🧪 Test Analytics", action: #selector(testAnalytics), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🔍 Debug Update System", action: #selector(debugUpdateSystem), keyEquivalent: ""))
@@ -952,7 +967,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
     internal func getVersionString() -> String {
         // Try to get version from bundle first, fallback to hardcoded
         if let bundleVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-           let bundleBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
+            let bundleBuild = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String {
             return "\(bundleVersion) (\(bundleBuild))"
         } else {
             return "\(appVersion) (\(appBuild))"
@@ -1807,17 +1822,30 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
     // MARK: - Per-App Position Management
 
-    internal func getCurrentActiveApp() -> String {
+    internal func getCurrentNonBongoCatApp() -> (bundleIdentifier: String, displayName: String) {
+        let currentFrontmost = getCurrentActiveApp()
+        
+        // If BongoCat is currently the frontmost app, return the last non-BongoCat app
+        if currentFrontmost.bundleIdentifier == getBundleIdentifier() || currentFrontmost.bundleIdentifier == "com.leaptech.bongo" {
+            print("🎯 BongoCat is frontmost, returning last non-BongoCat app: \(lastNonBongoCatApp.displayName)")
+            return lastNonBongoCatApp
+        }
+        
+        // Otherwise, return the current active app
+        return currentFrontmost
+    }
+
+    internal func getCurrentActiveApp() -> (bundleIdentifier: String, displayName: String) {
         if let frontmostApp = NSWorkspace.shared.frontmostApplication {
             let bundleID = frontmostApp.bundleIdentifier ?? "unknown"
             let appName = frontmostApp.localizedName ?? "Unknown App"
             print("🎯 Current active app: \(appName) (Bundle ID: \(bundleID))")
-            return bundleID
+            return (bundleIdentifier: bundleID, displayName: appName)
         }
-        return "unknown"
+        return (bundleIdentifier: "unknown", displayName: "Unknown App")
     }
 
-        internal func getSavedPositionsWithAppNames() -> [(appName: String, bundleID: String, position: NSPoint, screenName: String)] {
+    internal func getSavedPositionsWithAppNames() -> [(appName: String, bundleID: String, position: NSPoint, screenName: String)] {
         var positionsWithNames: [(appName: String, bundleID: String, position: NSPoint, screenName: String)] = []
 
         for (bundleID, position) in perAppPositions {
@@ -1825,7 +1853,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
             // Try to get the app name from the bundle ID
             if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID),
-               let bundle = Bundle(url: url) {
+                let bundle = Bundle(url: url) {
                 if let displayName = bundle.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String {
                     appName = displayName
                 } else if let bundleName = bundle.object(forInfoDictionaryKey: "CFBundleName") as? String {
@@ -1849,7 +1877,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         for screen in screens {
             let frame = screen.frame
             if position.x >= frame.minX && position.x <= frame.maxX &&
-               position.y >= frame.minY && position.y <= frame.maxY {
+                position.y >= frame.minY && position.y <= frame.maxY {
                 return getScreenName(screen)
             }
         }
@@ -1979,7 +2007,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
 
         // Initialize current active app
-        currentActiveApp = getCurrentActiveApp()
+        currentActiveApp = getCurrentActiveApp().bundleIdentifier
 
         print("Loaded per-app positioning - enabled: \(isPerAppPositioningEnabled), positions: \(perAppPositions)")
     }
@@ -2034,10 +2062,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         guard isPerAppPositioningEnabled || isPerAppHidingEnabled else { return }
 
         let newActiveApp = getCurrentActiveApp()
-        if newActiveApp != currentActiveApp && newActiveApp != "unknown" {
-            print("🔄 App switch detected: \(currentActiveApp) -> \(newActiveApp)")
-            handleAppSwitch(from: currentActiveApp, to: newActiveApp)
-            currentActiveApp = newActiveApp
+        if newActiveApp.bundleIdentifier != currentActiveApp && newActiveApp.bundleIdentifier != "unknown" {
+            print("🔄 App switch detected: \(currentActiveApp) -> \(newActiveApp.bundleIdentifier)")
+            
+            // Update last non-BongoCat app if we're switching TO a non-BongoCat app
+            if newActiveApp.bundleIdentifier != getBundleIdentifier() && newActiveApp.bundleIdentifier != "com.leaptech.bongo" {
+                lastNonBongoCatApp = newActiveApp
+                print("📝 Updated last non-BongoCat app: \(newActiveApp.displayName)")
+            }
+            
+            handleAppSwitch(from: currentActiveApp, to: newActiveApp.bundleIdentifier)
+            currentActiveApp = newActiveApp.bundleIdentifier
         }
     }
 
@@ -2089,7 +2124,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
         if isPerAppPositioningEnabled {
             // When enabling, save current position for the current app
-            currentActiveApp = getCurrentActiveApp()
+            currentActiveApp = getCurrentActiveApp().bundleIdentifier
             if let currentPosition = overlayWindow?.window?.frame.origin {
                 perAppPositions[currentActiveApp] = currentPosition
                 savePerAppPositioning()
@@ -2112,7 +2147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
         if isPerAppHidingEnabled {
             // When enabling, check if current app should be hidden
-            currentActiveApp = getCurrentActiveApp()
+            currentActiveApp = getCurrentActiveApp().bundleIdentifier
             let shouldHide = perAppHiddenApps.contains(currentActiveApp)
             if shouldHide {
                 overlayWindow?.hideWindow()
@@ -2139,9 +2174,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
     }
 
     @objc internal func hideForCurrentApp() {
-        let currentApp = getCurrentActiveApp()
-        if currentApp != "unknown" {
-            perAppHiddenApps.insert(currentApp)
+        let currentApp = getCurrentNonBongoCatApp()
+        if currentApp.bundleIdentifier != "unknown" {
+            perAppHiddenApps.insert(currentApp.bundleIdentifier)
             savePerAppHiding()
 
             if isPerAppHidingEnabled {
@@ -2152,10 +2187,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
             updateHiddenAppsMenuItems()
 
             // Track app hidden status change
-            analytics.trackAppHiddenStatusChanged(currentApp, hidden: true)
+            analytics.trackAppHiddenStatusChanged(currentApp.bundleIdentifier, hidden: true)
             trackFeatureUsed("hide_for_current_app")
 
-            print("Added \(currentApp) to hidden apps list")
+            print("Added \(currentApp.bundleIdentifier) to hidden apps list")
 
             // Show confirmation with app name
             if let appName = NSWorkspace.shared.frontmostApplication?.localizedName {
@@ -2165,9 +2200,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
     }
 
     @objc internal func showForCurrentApp() {
-        let currentApp = getCurrentActiveApp()
-        if currentApp != "unknown" {
-            perAppHiddenApps.remove(currentApp)
+        let currentApp = getCurrentNonBongoCatApp()
+        if currentApp.bundleIdentifier != "unknown" {
+            perAppHiddenApps.remove(currentApp.bundleIdentifier)
             savePerAppHiding()
 
             if isPerAppHidingEnabled {
@@ -2178,7 +2213,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
             updateHiddenAppsMenuItems()
 
             // Track app hidden status change
-            analytics.trackAppHiddenStatusChanged(currentApp, hidden: false)
+            analytics.trackAppHiddenStatusChanged(currentApp.bundleIdentifier, hidden: false)
             trackFeatureUsed("show_for_current_app")
 
             print("Removed \(currentApp) from hidden apps list")
@@ -2191,9 +2226,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
     }
 
     @objc internal func toggleOverlayForCurrentApp() {
-        let currentApp = getCurrentActiveApp()
-        if currentApp != "unknown" {
-            if perAppHiddenApps.contains(currentApp) {
+        let currentApp = getCurrentNonBongoCatApp()
+        if currentApp.bundleIdentifier != "unknown" {
+            if perAppHiddenApps.contains(currentApp.bundleIdentifier) {
                 showForCurrentApp()
             } else {
                 hideForCurrentApp()
@@ -2290,7 +2325,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
     private func updateHiddenAppsMenuItems() {
         guard let menu = statusBarItem?.menu else { return }
-        let currentApp = getCurrentActiveApp()
+        let currentApp = getCurrentActiveApp().bundleIdentifier
         let isCurrentAppHidden = perAppHiddenApps.contains(currentApp)
 
         // Find the app visibility submenu and update the hide/show items
@@ -2312,16 +2347,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         guard let menu = statusBarItem?.menu else { return }
 
         // Find the "Show/Hide Overlay (Current App: [<app_name>])" menu item and update its visibility
-        let currentAppDisplayName = NSWorkspace.shared.frontmostApplication?.localizedName ?? getCurrentActiveApp()
         for item in menu.items {
             if item.title.hasPrefix("Show/Hide Overlay (Current App:") || item.title.hasPrefix("Show Overlay (Current App:") || item.title.hasPrefix("Hide Overlay (Current App:") {
                 item.isHidden = !isPerAppHidingEnabled
                 if isPerAppHidingEnabled {
-                    let currentApp = getCurrentActiveApp()
-                    if perAppHiddenApps.contains(currentApp) {
-                        item.title = "Show Overlay (Current App: \(currentAppDisplayName))"
+                    let currentApp = getCurrentNonBongoCatApp()
+                    if perAppHiddenApps.contains(currentApp.bundleIdentifier) {
+                        item.title = "Show Overlay (Current App: \(currentApp.displayName))"
                     } else {
-                        item.title = "Hide Overlay (Current App: \(currentAppDisplayName))"
+                        item.title = "Hide Overlay (Current App: \(currentApp.displayName))"
                     }
                 }
                 break
