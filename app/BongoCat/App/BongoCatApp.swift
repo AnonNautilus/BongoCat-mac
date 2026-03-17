@@ -215,7 +215,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
 
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "Show/Hide Overlay", action: #selector(toggleOverlay), keyEquivalent: ""))
+        let currentAppDisplayName = NSWorkspace.shared.frontmostApplication?.localizedName ?? getCurrentActiveApp()
+        menu.addItem(NSMenuItem(title: "Show/Hide Overlay (Global)", action: #selector(toggleOverlay), keyEquivalent: ""))
+        let currentAppMenuItem = NSMenuItem(title: "Show/Hide Overlay (Current App: \(currentAppDisplayName))", action: #selector(toggleOverlayForCurrentAppPublic), keyEquivalent: "")
+        currentAppMenuItem.isHidden = !isPerAppHidingEnabled
+        menu.addItem(currentAppMenuItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Settings...", action: #selector(openPreferences), keyEquivalent: ","))
         menu.addItem(NSMenuItem(title: "Welcome Guide 🎯", action: #selector(showWelcomeGuide), keyEquivalent: ""))
@@ -1120,8 +1124,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         hideForCurrentApp()
     }
 
-    func showForCurrentAppPublic() {
-        showForCurrentApp()
+    @objc func toggleOverlayForCurrentAppPublic() {
+        toggleOverlayForCurrentApp()
     }
 
     func manageHiddenAppsPublic() {
@@ -2037,7 +2041,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
     }
 
-        internal func handleAppSwitch(from oldApp: String, to newApp: String) {
+    internal func handleAppSwitch(from oldApp: String, to newApp: String) {
         // Handle per-app positioning
         if isPerAppPositioningEnabled {
             // Save current position for the old app (if it's not "unknown")
@@ -2074,6 +2078,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
                 analytics.trackVisibilityToggled(true, method: "per_app_showing")
             }
         }
+
+        // Update menu item title to reflect current state
+        updateCurrentAppMenuItemVisibility()
     }
 
     @objc internal func togglePerAppPositioning() {
@@ -2121,6 +2128,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
 
         updatePerAppHidingMenuItem()
+        updateCurrentAppMenuItemVisibility()
 
         // Track per-app hiding toggle
         analytics.trackPerAppHidingToggled(isPerAppHidingEnabled)
@@ -2178,6 +2186,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
             // Show confirmation with app name
             if let appName = NSWorkspace.shared.frontmostApplication?.localizedName {
                 showNotification(title: "BongoCat Visible", message: "Cat will now show when \(appName) is active")
+            }
+        }
+    }
+
+    @objc internal func toggleOverlayForCurrentApp() {
+        let currentApp = getCurrentActiveApp()
+        if currentApp != "unknown" {
+            if perAppHiddenApps.contains(currentApp) {
+                showForCurrentApp()
+            } else {
+                hideForCurrentApp()
             }
         }
     }
@@ -2289,6 +2308,27 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         }
     }
 
+    private func updateCurrentAppMenuItemVisibility() {
+        guard let menu = statusBarItem?.menu else { return }
+
+        // Find the "Show/Hide Overlay (Current App: [<app_name>])" menu item and update its visibility
+        let currentAppDisplayName = NSWorkspace.shared.frontmostApplication?.localizedName ?? getCurrentActiveApp()
+        for item in menu.items {
+            if item.title.hasPrefix("Show/Hide Overlay (Current App:") || item.title.hasPrefix("Show Overlay (Current App:") || item.title.hasPrefix("Hide Overlay (Current App:") {
+                item.isHidden = !isPerAppHidingEnabled
+                if isPerAppHidingEnabled {
+                    let currentApp = getCurrentActiveApp()
+                    if perAppHiddenApps.contains(currentApp) {
+                        item.title = "Show Overlay (Current App: \(currentAppDisplayName))"
+                    } else {
+                        item.title = "Hide Overlay (Current App: \(currentAppDisplayName))"
+                    }
+                }
+                break
+            }
+        }
+    }
+
     private func showNotification(title: String, message: String) {
         let content = UNMutableNotificationContent()
         content.title = title
@@ -2311,6 +2351,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
         // Update per-app hiding menu items based on current app
         updateHiddenAppsMenuItems()
+
+        // Update current app menu item visibility and title
+        updateCurrentAppMenuItemVisibility()
     }
 
     // MARK: - App Lifecycle Tracking
