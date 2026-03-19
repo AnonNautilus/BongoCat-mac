@@ -173,6 +173,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         savePerAppPositioning()
         savePerAppHiding()
 
+        // Clean up observers
+        NotificationCenter.default.removeObserver(self)
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
+
         // Track session duration and usage patterns
         let sessionDuration = Date().timeIntervalSince(appLaunchTime)
         analytics.trackSessionDuration(sessionDuration)
@@ -203,23 +208,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         statusBarItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         print("🔧 Status bar item created: \(statusBarItem != nil)")
 
-        if let button = statusBarItem?.button {
-            // Try to load the menu-logo.png file
-            if let iconImage = loadStatusBarIcon() {
-                button.image = iconImage
-                button.imagePosition = .imageOnly
-                print("🔧 Status bar icon loaded from menu-logo.png")
-            } else {
-                // Fallback to emoji if icon loading fails
-                button.title = "🐱"
-                print("🔧 Fallback to emoji icon")
-            }
-
-            button.toolTip = "BongoCat - Click for menu"
-            print("🔧 Status bar button configured")
-        } else {
-            print("❌ Failed to get status bar button")
-        }
+        updateStatusBarIconForCurrentAppearance()
 
         let menu = NSMenu()
         let currentApp = getCurrentNonBongoCatApp()
@@ -255,8 +244,6 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         // Developer options (only show if analytics debug is needed)
         #if DEBUG
         menu.addItem(NSMenuItem.separator())
-        menu.addItem(NSMenuItem(title: "Current Active App: \(debugCurrentApp.bundleIdentifier)", action: nil, keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Current Non-BongoCat Active App: \(currentApp.bundleIdentifier)", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🔧 Analytics Status", action: #selector(showAnalyticsStatus), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🧪 Test Analytics", action: #selector(testAnalytics), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "🔍 Debug Update System", action: #selector(debugUpdateSystem), keyEquivalent: ""))
@@ -295,112 +282,138 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         print("🔧 Status bar setup complete")
     }
 
+    @objc private func updateStatusBarIconForCurrentAppearance() {
+        guard let button = statusBarItem?.button else {
+            print("❌ Failed to get status bar button")
+            return
+        }
+
+        // Reload icon so it matches current light/dark appearance.
+        if let iconImage = loadStatusBarIcon() {
+            button.image = iconImage
+            button.title = ""
+            button.imagePosition = .imageOnly
+            print("🔧 Status bar icon loaded successfully")
+        } else {
+            button.image = nil
+            button.title = "🐱"
+            print("🔧 Fallback to emoji icon")
+        }
+
+        button.toolTip = "BongoCat - Click for menu"
+        print("🔧 Status bar button configured")
+    }
+
     /// Loads the status bar icon, searching in the app bundle's Resources directory first,
     /// then falling back to other locations for development and CLI scenarios.
     private func loadStatusBarIcon() -> NSImage? {
-        print("🔍 Attempting to load status bar icon: menu-logo.png")
+        let folderCandidates = statusBarIconFolderCandidates()
 
-        // 1. Try Bundle.main.resourceURL (the correct way for packaged macOS apps)
-        if let resourceURL = Bundle.main.resourceURL?.appendingPathComponent("menu-logo.png") {
-            print("🔎 Checking Bundle.main.resourceURL: \(resourceURL.path)")
-            if let image = NSImage(contentsOf: resourceURL) {
-                print("✅ Loaded status bar icon from Bundle.main.resourceURL: \(resourceURL.path)")
-                return resizeIconForStatusBar(image, fromPath: "Bundle.main.resourceURL: \(resourceURL.path)")
-            }
-        } else {
-            print("⚠️  Bundle.main.resourceURL is nil")
+        if let image = loadStatusBarIconFromBundle(folderCandidates: folderCandidates) {
+            return image
         }
 
-        // 2. Try Bundle.main.path(forResource:) (legacy, but sometimes works)
-        if let bundlePath = Bundle.main.path(forResource: "menu-logo", ofType: "png") {
-            print("🔎 Checking Bundle.main.path: \(bundlePath)")
-            if let bundleImage = NSImage(contentsOfFile: bundlePath) {
-                print("✅ Loaded status bar icon from Bundle.main.path: \(bundlePath)")
-                return resizeIconForStatusBar(bundleImage, fromPath: "Bundle.main.path: \(bundlePath)")
-            }
-        } else {
-            print("⚠️  Bundle.main.path(forResource:) returned nil")
+        if let image = loadStatusBarIconFromAncestorSearch(folderCandidates: folderCandidates) {
+            return image
         }
 
-        // 3. Try NSImage(named:) (works if image is in asset catalog or registered in bundle)
-        print("🔎 Checking NSImage(named: menu-logo)")
-        if let bundleImage = NSImage(named: "menu-logo") {
-            print("✅ Loaded status bar icon from NSImage(named: menu-logo)")
-            return resizeIconForStatusBar(bundleImage, fromPath: "NSImage(named: menu-logo)")
+        if let assetImage = NSImage(named: "Icon Status Badge") {
+            print("✅ Loaded status bar icon from NSImage(named: Icon Status Badge)")
+            return resizeIconForStatusBar(assetImage, fromPath: "NSImage(named: Icon Status Badge)")
         }
 
-        // 4. Try in-place next to executable (for CLI/dev scenarios)
-        if let executablePath = Bundle.main.executablePath {
-            let executableDir = URL(fileURLWithPath: executablePath).deletingLastPathComponent()
-            let possiblePaths = [
-                executableDir.appendingPathComponent("menu-logo.png"),
-                executableDir.appendingPathComponent("Resources/menu-logo.png"),
-                executableDir.appendingPathComponent("Sources/BongoCat/Resources/menu-logo.png")
-            ]
-            for path in possiblePaths {
-                print("🔎 Checking executable directory: \(path.path)")
-                if let image = NSImage(contentsOf: path) {
-                    print("✅ Loaded status bar icon from executable directory: \(path.path)")
-                    return resizeIconForStatusBar(image, fromPath: "executable directory: \(path.path)")
-                }
-            }
-        } else {
-            print("⚠️  Bundle.main.executablePath is nil")
-        }
-
-        // 5. Try current working directory (for CLI/dev scenarios)
-        let currentDir = FileManager.default.currentDirectoryPath
-        let cwdPaths = [
-            "\(currentDir)/menu-logo.png",
-            "\(currentDir)/Resources/menu-logo.png",
-            "\(currentDir)/Sources/BongoCat/Resources/menu-logo.png"
-        ]
-        for path in cwdPaths {
-            print("🔎 Checking current directory: \(path)")
-            if let image = NSImage(contentsOfFile: path) {
-                print("✅ Loaded status bar icon from current directory: \(path)")
-                return resizeIconForStatusBar(image, fromPath: "current directory: \(path)")
-            }
-        }
-
-        // 6. Try relative paths (last resort)
-        let relativePaths = [
-            "menu-logo.png",
-            "./menu-logo.png",
-            "Resources/menu-logo.png",
-            "Sources/BongoCat/Resources/menu-logo.png"
-        ]
-        for path in relativePaths {
-            print("🔎 Checking relative path: \(path)")
-            if let image = NSImage(contentsOfFile: path) {
-                print("✅ Loaded status bar icon from relative path: \(path)")
-                return resizeIconForStatusBar(image, fromPath: "relative path: \(path)")
-            }
-        }
-
-        // 7. (Optional) Try loading from a resource bundle if present (for SPM plugin/dev)
-        let allBundles = Bundle.allBundles
-        if !allBundles.isEmpty {
-            for bundle in allBundles {
-                print("🔎 Checking bundle: \(bundle.bundlePath)")
-                if let url = bundle.url(forResource: "menu-logo", withExtension: "png") {
-                    print("🔎 Checking bundle resource: \(url.path)")
-                    if let image = NSImage(contentsOf: url) {
-                        print("✅ Loaded status bar icon from bundle: \(bundle.bundlePath)")
-                        return resizeIconForStatusBar(image, fromPath: "Bundle: \(bundle.bundlePath)")
-                    }
-                }
-            }
-        } else {
-            print("⚠️  No additional bundles found in Bundle.allBundles")
-        }
-
-        print("❌ Failed to load menu-logo.png from all attempted methods")
+        print("❌ Failed to load status bar icon from icon-status-bar folders and asset fallback")
         print("🔍 Debug info:")
         print("  - Bundle.main.bundlePath: \(Bundle.main.bundlePath)")
         print("  - Bundle.main.resourceURL: \(Bundle.main.resourceURL?.path ?? "nil")")
         print("  - Bundle.main.executablePath: \(Bundle.main.executablePath ?? "nil")")
         print("  - Current working directory: \(FileManager.default.currentDirectoryPath)")
+        return nil
+    }
+
+    private func statusBarIconFileCandidates() -> [String] {
+        ["22x22.png", "24x24.png", "14x14.png", "11x11.png", "48x48.png", "50x50.png", "100x100.png", "200x200.png", "7x7.png"]
+    }
+
+    private func statusBarIconFolderCandidates() -> [String] {
+        let isDarkMode = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let preferred = isDarkMode ? "Assets/resources/icon-status-bar-inverted" : "Assets/resources/icon-status-bar"
+        let fallback = isDarkMode ? "Assets/resources/icon-status-bar" : "Assets/resources/icon-status-bar-inverted"
+        print("🎨 Appearance detected: \(isDarkMode ? "dark" : "light")")
+        return [preferred, fallback]
+    }
+
+    private func loadStatusBarIconFromBundle(folderCandidates: [String]) -> NSImage? {
+        guard let resourceURL = Bundle.main.resourceURL else { return nil }
+
+        var bundleFolders: [URL] = []
+        for folder in folderCandidates {
+            let folderName = (folder as NSString).lastPathComponent
+            bundleFolders.append(resourceURL.appendingPathComponent(folderName))
+            bundleFolders.append(resourceURL.appendingPathComponent(folder))
+        }
+
+        for folderURL in bundleFolders {
+            if let image = loadStatusBarIcon(from: folderURL, source: "Bundle.main.resourceURL") {
+                return image
+            }
+        }
+
+        return nil
+    }
+
+    private func loadStatusBarIconFromAncestorSearch(folderCandidates: [String]) -> NSImage? {
+        for root in statusBarIconSearchRoots() {
+            for ancestor in ancestorChain(startingAt: root) {
+                for folder in folderCandidates {
+                    let folderURL = ancestor.appendingPathComponent(folder)
+                    if let image = loadStatusBarIcon(from: folderURL, source: "resolved workspace path") {
+                        return image
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private func statusBarIconSearchRoots() -> [URL] {
+        var roots: [URL] = [URL(fileURLWithPath: FileManager.default.currentDirectoryPath)]
+        if let executablePath = Bundle.main.executablePath {
+            roots.append(URL(fileURLWithPath: executablePath).deletingLastPathComponent())
+        }
+        if let resourceURL = Bundle.main.resourceURL {
+            roots.append(resourceURL)
+        }
+        return roots
+    }
+
+    private func ancestorChain(startingAt start: URL) -> [URL] {
+        var chain: [URL] = []
+        var seen = Set<String>()
+        var current = start
+
+        while seen.insert(current.path).inserted {
+            chain.append(current)
+            let parent = current.deletingLastPathComponent()
+            if parent.path == current.path {
+                break
+            }
+            current = parent
+        }
+
+        return chain
+    }
+
+    private func loadStatusBarIcon(from folderURL: URL, source: String) -> NSImage? {
+        for fileName in statusBarIconFileCandidates() {
+            let iconURL = folderURL.appendingPathComponent(fileName)
+            if let image = NSImage(contentsOf: iconURL) {
+                print("✅ Loaded status bar icon from \(source): \(iconURL.path)")
+                return resizeIconForStatusBar(image, fromPath: "\(source): \(iconURL.path)")
+            }
+        }
+
         return nil
     }
 
@@ -2421,6 +2434,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
             name: NSWorkspace.didWakeNotification,
             object: nil
         )
+
+        // Listen for system appearance changes (light/dark mode).
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(systemAppearanceDidChange),
+            name: Notification.Name("AppleInterfaceThemeChangedNotification"),
+            object: nil
+        )
+    }
+
+    @objc private func systemAppearanceDidChange() {
+        DispatchQueue.main.async {
+            self.updateStatusBarIconForCurrentAppearance()
+        }
     }
 
     @objc private func applicationDidBecomeActive() {
