@@ -520,6 +520,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         alert.informativeText = """
         BongoCat needs accessibility access to detect your keyboard input.
 
+        After enabling Accessibility permission, quit and restart BongoCat for keyboard tracking to work.
+
         If you already granted access but still see this message, try:
         1. Remove BongoCat from Accessibility list in System Preferences
         2. Re-add it by running the app again
