@@ -471,12 +471,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
         print("Input monitoring started")
     }
 
+    private func isAccessibilityTrusted(prompt: Bool) -> Bool {
+        if !prompt {
+            return AXIsProcessTrusted()
+        }
+
+        let options = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        return AXIsProcessTrustedWithOptions(options)
+    }
+
     private func requestAccessibilityPermissions() {
         // Track permission request
         analytics.trackAccessibilityPermissionRequested()
 
         // First check without prompting
-        let accessEnabled = AXIsProcessTrusted()
+        let accessEnabled = isAccessibilityTrusted(prompt: false)
 
         if accessEnabled {
             print("✅ Accessibility access already granted")
@@ -486,15 +495,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, ObservableOb
 
         print("⚠️ Accessibility access required")
 
-        // Check if we should show the system prompt
-        let options: NSDictionary = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true]
-        let accessEnabledWithPrompt = AXIsProcessTrustedWithOptions(options)
+        // Request the modern system prompt (also pre-populates this app in Accessibility list).
+        let accessEnabledWithPrompt = isAccessibilityTrusted(prompt: true)
 
         if !accessEnabledWithPrompt {
             // Give the system a moment to show the system dialog first
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
                 // Only show our custom dialog if system dialog didn't handle it
-                if !AXIsProcessTrusted() {
+                if !self.isAccessibilityTrusted(prompt: false) {
                     self.analytics.trackAccessibilityPermissionDenied()
                     self.showAccessibilityAlert()
                 } else {
